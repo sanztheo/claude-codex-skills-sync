@@ -52,7 +52,21 @@ chmod +x ~/sync-skills.sh
 ./sync-skills.sh
 ```
 
-Tu choisis une direction. Le script affiche un plan (combien de skills sont nouveaux, différents, identiques), te demande si tu veux le détail, puis te propose d'appliquer.
+1. Tu choisis **"Synchroniser entre deux cibles"** dans le menu principal.
+2. Tu choisis la **source** parmi Claude, Codex, Cursor.
+3. Tu choisis la **destination** parmi les 2 cibles restantes.
+4. Le script affiche un plan (combien de skills sont nouveaux, différents, identiques).
+5. Tu peux demander le détail puis appliquer (`y`) ou rester en dry-run (`n`).
+
+### Les 6 directions possibles
+
+| Source ↓ \ Destination → | Claude | Codex | Cursor |
+|---|---|---|---|
+| **Claude** | — | `claude-to-codex` | `claude-to-cursor` |
+| **Codex** | `codex-to-claude` | — | `codex-to-cursor` |
+| **Cursor** | `cursor-to-claude` | `cursor-to-codex` | — |
+
+Le label en case du tableau est aussi le préfixe du dossier de backup créé.
 
 ### Mode direct (skip le dry-run)
 
@@ -96,7 +110,7 @@ Les backups sont des copies brutes des dossiers de skills (pas d'archive), donc 
 
 ### Restauration
 
-Menu option **4** :
+Menu option **3** :
 
 1. Le script liste les sessions de backup disponibles.
 2. Tu choisis une session (par numéro).
