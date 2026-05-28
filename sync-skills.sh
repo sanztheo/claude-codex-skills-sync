@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# sync-skills.sh — Synchronise les skills entre Claude Code CLI et Codex.
-# Direction au choix, backup automatique des skills écrasés, mode dry-run par défaut.
+# sync-skills.sh — Synchronise les skills entre Claude Code CLI, Codex et Cursor.
+# Toutes directions au choix, backup automatique des skills écrasés, mode dry-run par défaut.
 
 set -euo pipefail
 
 # ─── Configuration (overridable via env vars pour tests) ─────────────────────
 CLAUDE_DIR="${SKILLS_SYNC_CLAUDE_DIR:-$HOME/.claude/skills}"
 CODEX_DIR="${SKILLS_SYNC_CODEX_DIR:-$HOME/.codex/skills}"
+CURSOR_DIR="${SKILLS_SYNC_CURSOR_DIR:-$HOME/.cursor/skills}"
 BACKUP_ROOT="${SKILLS_SYNC_BACKUP_ROOT:-$HOME/.skills-sync-backups}"
+
+# Cibles disponibles (arrays parallèles : compatible bash 3.2 par défaut sur macOS).
+TARGET_NAMES=("claude" "codex" "cursor")
+TARGET_LABELS=("Claude" "Codex" "Cursor")
+TARGET_PATHS=("$CLAUDE_DIR" "$CODEX_DIR" "$CURSOR_DIR")
 
 # ─── Couleurs ─────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -28,12 +34,17 @@ Usage: $0 [--apply]
   --apply  Exécute réellement les changements (par défaut : dry-run).
   --help   Affiche cette aide.
 
+Cibles supportées : Claude (~/.claude/skills), Codex (~/.codex/skills), Cursor (~/.cursor/skills).
+Toutes les 6 directions sont possibles via le menu "Source → Destination".
+
 Menu interactif :
-  1) Claude → Codex
-  2) Codex → Claude
-  3) Lister les backups
-  4) Restaurer un backup
-  5) Quitter
+  1) Synchroniser entre deux cibles
+  2) Lister les backups
+  3) Restaurer un backup
+  4) Quitter
+
+Env vars (overrides) : SKILLS_SYNC_CLAUDE_DIR, SKILLS_SYNC_CODEX_DIR,
+                       SKILLS_SYNC_CURSOR_DIR, SKILLS_SYNC_BACKUP_ROOT
 EOF
       exit 0
       ;;
@@ -67,6 +78,36 @@ confirm() {
   local prompt="$1" reply
   read -rp "$prompt [y/N]: " reply
   [[ "$reply" =~ ^[YyOo] ]]
+}
+
+# Affiche les cibles disponibles (en excluant éventuellement une cible déjà choisie)
+# puis lit le choix utilisateur. Écrit le résultat dans SELECTED_NAME et SELECTED_PATH.
+# Retourne 1 si le choix est invalide.
+select_target() {
+  local prompt="$1" exclude="${2:-}"
+  local -a names=() labels=() paths=()
+  local i
+  for i in "${!TARGET_NAMES[@]}"; do
+    [[ "${TARGET_NAMES[$i]}" == "$exclude" ]] && continue
+    names+=("${TARGET_NAMES[$i]}")
+    labels+=("${TARGET_LABELS[$i]}")
+    paths+=("${TARGET_PATHS[$i]}")
+  done
+
+  echo
+  echo "${BOLD}$prompt${NC}"
+  for i in "${!names[@]}"; do
+    printf "  %d) %-7s (%s)\n" "$((i+1))" "${labels[$i]}" "${paths[$i]}"
+  done
+
+  local choice
+  read -rp "Choix : " choice
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#names[@]} )); then
+    return 1
+  fi
+  SELECTED_NAME="${names[$((choice-1))]}"
+  SELECTED_PATH="${paths[$((choice-1))]}"
+  return 0
 }
 
 # ─── Sync core ────────────────────────────────────────────────────────────────
@@ -139,17 +180,22 @@ sync_direction() {
   printf 'src=%s\ndst=%s\nlabel=%s\nts=%s\n' \
     "$src_root" "$dst_root" "$label" "$ts" > "$session_backup/.session_info"
 
-  for n in "${new_list[@]}"; do
-    cp -a "$src_root/$n" "$dst_root/$n"
-    echo "  ${GREEN}+ $n${NC}"
-  done
+  # Guards : bash 3.2 (macOS) + set -u crashe sur l'expansion d'un array vide.
+  if (( ${#new_list[@]} > 0 )); then
+    for n in "${new_list[@]}"; do
+      cp -a "$src_root/$n" "$dst_root/$n"
+      echo "  ${GREEN}+ $n${NC}"
+    done
+  fi
 
-  for n in "${diff_list[@]}"; do
-    cp -a "$dst_root/$n" "$session_backup/$n"
-    rm -rf "$dst_root/$n"
-    cp -a "$src_root/$n" "$dst_root/$n"
-    echo "  ${YELLOW}~ $n${NC} (backup → $session_backup/$n)"
-  done
+  if (( ${#diff_list[@]} > 0 )); then
+    for n in "${diff_list[@]}"; do
+      cp -a "$dst_root/$n" "$session_backup/$n"
+      rm -rf "$dst_root/$n"
+      cp -a "$src_root/$n" "$dst_root/$n"
+      echo "  ${YELLOW}~ $n${NC} (backup → $session_backup/$n)"
+    done
+  fi
 
   # Si aucun backup réel n'a été créé, nettoyage du dossier vide.
   if (( ${#diff_list[@]} == 0 )); then
@@ -158,6 +204,23 @@ sync_direction() {
   else
     echo "${GREEN}Backups : $session_backup${NC}"
   fi
+}
+
+# ─── Sync flow (orchestration source → destination) ──────────────────────────
+sync_flow() {
+  if ! select_target "Source ?"; then
+    echo "${RED}Choix invalide.${NC}"
+    return 0
+  fi
+  local src_name="$SELECTED_NAME" src_path="$SELECTED_PATH"
+
+  if ! select_target "Destination ?" "$src_name"; then
+    echo "${RED}Choix invalide.${NC}"
+    return 0
+  fi
+  local dst_name="$SELECTED_NAME" dst_path="$SELECTED_PATH"
+
+  sync_direction "$src_path" "$dst_path" "${src_name}-to-${dst_name}"
 }
 
 # ─── Backups : list ───────────────────────────────────────────────────────────
@@ -320,19 +383,19 @@ main_menu() {
   while true; do
     banner
     echo
-    echo "  1) Claude → Codex   ($CLAUDE_DIR → $CODEX_DIR)"
-    echo "  2) Codex → Claude   ($CODEX_DIR → $CLAUDE_DIR)"
-    echo "  3) Lister les backups"
-    echo "  4) Restaurer un backup"
-    echo "  5) Quitter"
+    echo "  1) Synchroniser entre deux cibles"
+    echo "  2) Lister les backups"
+    echo "  3) Restaurer un backup"
+    echo "  4) Quitter"
     echo
-    read -rp "Choix [1-5] : " choice
+    echo "  Cibles : Claude (~/.claude/skills), Codex (~/.codex/skills), Cursor (~/.cursor/skills)"
+    echo
+    read -rp "Choix [1-4] : " choice
     case "$choice" in
-      1) sync_direction "$CLAUDE_DIR" "$CODEX_DIR" "claude-to-codex" ;;
-      2) sync_direction "$CODEX_DIR" "$CLAUDE_DIR" "codex-to-claude" ;;
-      3) list_backups ;;
-      4) restore_backup ;;
-      5|q|Q|"") echo "Bye."; exit 0 ;;
+      1) sync_flow ;;
+      2) list_backups ;;
+      3) restore_backup ;;
+      4|q|Q|"") echo "Bye."; exit 0 ;;
       *) echo "${RED}Choix invalide.${NC}" ;;
     esac
   done

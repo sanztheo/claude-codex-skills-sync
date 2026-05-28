@@ -9,8 +9,9 @@ SYNC_SCRIPT="$SCRIPT_DIR/sync-skills.sh"
 TEST_ROOT="$(mktemp -d -t sync-skills-test-XXXXXX)"
 CLAUDE="$TEST_ROOT/claude/skills"
 CODEX="$TEST_ROOT/codex/skills"
+CURSOR="$TEST_ROOT/cursor/skills"
 BACKUPS="$TEST_ROOT/backups"
-mkdir -p "$CLAUDE" "$CODEX"
+mkdir -p "$CLAUDE" "$CODEX" "$CURSOR"
 
 pass() { echo "  ✓ $1"; }
 fail() { echo "  ✗ $1"; FAILS=$((FAILS+1)); }
@@ -87,17 +88,32 @@ echo
 echo "═══ Setup test ═══"
 echo "  Claude skills : $(ls "$CLAUDE" | tr '\n' ' ')"
 echo "  Codex  skills : $(ls "$CODEX"  | tr '\n' ' ')"
+echo "  Cursor skills : $(ls "$CURSOR" | tr '\n' ' ')"
+
+# Wrapper pour invoquer le script avec toutes les env vars en place.
+run_sync() {
+  SKILLS_SYNC_CLAUDE_DIR="$CLAUDE" \
+  SKILLS_SYNC_CODEX_DIR="$CODEX" \
+  SKILLS_SYNC_CURSOR_DIR="$CURSOR" \
+  SKILLS_SYNC_BACKUP_ROOT="$BACKUPS" \
+    "$SYNC_SCRIPT" "$@"
+}
+
+# Menu actuel (4 options) :
+#   1) Synchroniser   2) Lister  3) Restaurer  4) Quitter
+# Dans "Synchroniser", source/destination sont demandées séparément.
+# Cibles : claude=1, codex=2, cursor=3.
+# Quand on choisit source=claude, destination affiche {codex(1), cursor(2)}.
 
 echo
 echo "═══ Run 1 : DRY-RUN (claude→codex), refuse apply ═══"
-SKILLS_SYNC_CLAUDE_DIR="$CLAUDE" \
-SKILLS_SYNC_CODEX_DIR="$CODEX" \
-SKILLS_SYNC_BACKUP_ROOT="$BACKUPS" \
-  "$SYNC_SCRIPT" <<EOF | sed 's/^/    /'
+run_sync <<EOF | sed 's/^/    /'
+1
+1
 1
 n
 n
-5
+4
 EOF
 
 # Vérifie : rien n'a bougé
@@ -111,14 +127,13 @@ fi
 
 echo
 echo "═══ Run 2 : DRY-RUN puis APPLY in-session (claude→codex) ═══"
-SKILLS_SYNC_CLAUDE_DIR="$CLAUDE" \
-SKILLS_SYNC_CODEX_DIR="$CODEX" \
-SKILLS_SYNC_BACKUP_ROOT="$BACKUPS" \
-  "$SYNC_SCRIPT" <<EOF | sed 's/^/    /'
+run_sync <<EOF | sed 's/^/    /'
+1
+1
 1
 n
 y
-5
+4
 EOF
 
 # Vérifications post-apply
@@ -188,20 +203,47 @@ else
   fail "Backup pour diff-skill manquant"
 fi
 
-# ─── Run 3 : Restore in-session ──────────────────────────────────────────────
+# ─── Run 3 : Claude → Cursor (NEW dans la 3e cible) ──────────────────────────
 echo
-echo "═══ Run 3 : Restore via menu 4 ═══"
+echo "═══ Run 3 : APPLY claude→cursor (3e cible) ═══"
+run_sync <<EOF | sed 's/^/    /'
+1
+1
+2
+n
+y
+4
+EOF
+
+# Vérif : claude-only doit maintenant exister côté Cursor aussi
+if [[ -f "$CURSOR/claude-only/SKILL.md" ]]; then
+  pass "Cursor : claude-only copié depuis Claude"
+else
+  fail "Cursor : claude-only manquant"
+fi
+if grep -q '^name: claude-only$' "$CURSOR/claude-only/SKILL.md" 2>/dev/null; then
+  pass "Cursor : frontmatter YAML préservé après sync vers Cursor"
+else
+  fail "Cursor : frontmatter corrompu"
+fi
+# Sens inverse intact : codex-only ne doit PAS apparaître côté Cursor
+if [[ ! -d "$CURSOR/codex-only" ]]; then
+  pass "Cursor : codex-only absent (sync claude→cursor ne touche pas codex)"
+else
+  fail "Cursor : codex-only apparu par erreur"
+fi
+
+# ─── Run 4 : Restore in-session ──────────────────────────────────────────────
+echo
+echo "═══ Run 4 : Restore via menu 3 ═══"
 CLAUDE_DIFF_HASH_AFTER_APPLY="$(shasum "$CODEX/diff-skill/SKILL.md" | cut -d' ' -f1)"
 
-SKILLS_SYNC_CLAUDE_DIR="$CLAUDE" \
-SKILLS_SYNC_CODEX_DIR="$CODEX" \
-SKILLS_SYNC_BACKUP_ROOT="$BACKUPS" \
-  "$SYNC_SCRIPT" <<EOF | sed 's/^/    /'
-4
+run_sync <<EOF | sed 's/^/    /'
+3
 1
 all
 y
-5
+4
 EOF
 
 # Vérif : diff-skill côté Codex = version d'origine

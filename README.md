@@ -1,24 +1,27 @@
 # claude-codex-skills-sync
 
-Synchronise tes skills entre **Claude Code CLI** (`~/.claude/skills/`) et **Codex** (`~/.codex/skills/`).
-Bidirectionnel, dry-run par défaut, backups groupés par session, restauration interactive.
+Synchronise tes skills entre **Claude Code CLI** (`~/.claude/skills/`), **Codex** (`~/.codex/skills/`) et **Cursor** (`~/.cursor/skills/`).
+Toutes directions au choix, dry-run par défaut, backups groupés par session, restauration interactive.
 
 ```
 ═══ Skills Sync Tool ═══
 (DRY-RUN — apply proposé à la fin de chaque opération, ou --apply au lancement)
 
-  1) Claude → Codex   (~/.claude/skills → ~/.codex/skills)
-  2) Codex → Claude   (~/.codex/skills → ~/.claude/skills)
-  3) Lister les backups
-  4) Restaurer un backup
-  5) Quitter
+  1) Synchroniser entre deux cibles
+  2) Lister les backups
+  3) Restaurer un backup
+  4) Quitter
+
+  Cibles : Claude (~/.claude/skills), Codex (~/.codex/skills), Cursor (~/.cursor/skills)
 ```
+
+Après `1)`, le script demande la **source** puis la **destination** parmi les 3 cibles — soit 6 directions possibles (Claude↔Codex, Claude↔Cursor, Codex↔Cursor).
 
 ---
 
 ## Pourquoi
 
-Si tu utilises à la fois Claude Code CLI et Codex CLI, tu écris probablement tes skills d'un côté et tu fais du copier-coller manuel de l'autre. Les deux outils partagent le même format (YAML frontmatter `name` + `description`, contenu Markdown), mais aucun outil natif n'existe pour les garder alignés.
+Si tu utilises plusieurs assistants IA (Claude Code, Codex, Cursor), tu écris probablement tes skills d'un côté et tu fais du copier-coller manuel de l'autre. Les trois outils partagent le **même format** : YAML frontmatter `name` + `description` + contenu Markdown. Mais aucun outil natif n'existe pour les garder alignés.
 
 Ce script résout ce problème en une commande, avec des garde-fous (dry-run, backups, restore).
 
@@ -115,24 +118,27 @@ Tu peux pointer le script ailleurs que les chemins par défaut, utile pour teste
 ```bash
 SKILLS_SYNC_CLAUDE_DIR=/chemin/custom/claude/skills \
 SKILLS_SYNC_CODEX_DIR=/chemin/custom/codex/skills \
+SKILLS_SYNC_CURSOR_DIR=/chemin/custom/cursor/skills \
 SKILLS_SYNC_BACKUP_ROOT=/chemin/backups \
   ./sync-skills.sh
 ```
 
 ## Tests
 
-Un harness d'intégration est fourni. Il crée un faux setup dans `/tmp`, exécute toutes les opérations (sync, restore), vérifie 11 assertions et nettoie tout :
+Un harness d'intégration est fourni. Il crée un faux setup dans `/tmp` (avec les 3 cibles Claude, Codex, Cursor), exécute toutes les opérations (sync, restore), vérifie 14 assertions et nettoie tout :
 
 ```bash
 ./test.sh
 ```
 
 Couverture :
-- Cas NEW, DIFF, SAME
+- Cas NEW, DIFF, SAME pour Claude→Codex
+- Cas NEW pour Claude→Cursor (3e cible)
 - Exclusion de `_archived`
 - Copie récursive des sous-dossiers (`assets/`)
 - Préservation du frontmatter YAML
 - Le sync Claude→Codex ne touche pas aux skills Codex-only
+- Le sync Claude→Cursor ne touche pas aux skills Codex (isolation des cibles)
 - Création du dossier de backup
 - Restauration complète
 - Création du `_pre-restore` (sécurité avant restore)
@@ -141,7 +147,7 @@ Sortie attendue : `✓ TOUS LES TESTS PASSENT (0 échec)`.
 
 ## Format des skills
 
-Les deux écosystèmes utilisent le même format minimal :
+Les trois écosystèmes utilisent le même format minimal :
 
 ```markdown
 ---
@@ -168,10 +174,19 @@ Tout est copié récursivement (`cp -a`). La comparaison `diff -rq` détecte aus
 Le script ne supprime jamais. Tu peux supprimer manuellement, ou faire un sync inverse depuis une source qui n'a plus le skill (mais cela ne supprime pas non plus — le script ne fait que copier/écraser).
 
 **Comment annuler un sync raté ?**
-Menu option **4** (Restaurer un backup), choisis la session, tape `all`, confirme. Le pre-restore est créé en sécurité.
+Menu option **3** (Restaurer un backup), choisis la session, tape `all`, confirme. Le pre-restore est créé en sécurité.
 
-**Mes descriptions de skills sont différentes entre Claude et Codex, c'est normal ?**
-Oui, c'est un choix valide (chaque écosystème peut avoir sa propre trigger). Le script considère cela comme un cas **DIFF** : il backupe puis écrase la version destination. Si tu veux préserver les divergences volontaires, fais un sync sélectif (tu peux toujours restaurer après).
+**Mes descriptions de skills sont différentes entre Claude, Codex et Cursor, c'est normal ?**
+Oui, c'est un choix valide (chaque écosystème peut avoir sa propre formulation de trigger). Le script considère cela comme un cas **DIFF** : il backupe puis écrase la version destination. Si tu veux préserver les divergences volontaires, fais un sync sélectif (tu peux toujours restaurer après).
+
+**Et `~/.cursor/rules/` ? Le script le synchronise ?**
+Non. `~/.cursor/rules/*.md` est un format différent (Markdown plat avec frontmatter Cursor — `description`, `alwaysApply`, `globs`) qui sert de configuration projet, pas de skills réutilisables. Le script ne touche qu'à `~/.cursor/skills/`, qui partage le format Claude/Codex.
+
+**Et `~/.cursor/skills-cursor/` ?**
+Non plus. Ce dossier contient des skills spécifiques à l'éditeur Cursor (par ex. `canvas`, `migrate-to-skills`) qui n'ont pas leur équivalent côté Claude ou Codex. Pour les inclure quand même, override `SKILLS_SYNC_CURSOR_DIR=~/.cursor/skills-cursor`.
+
+**Codex répond bizarrement après un sync, est-ce un bug du script ?**
+Probablement pas. Si tu as un `~/.codex/AGENTS.md` avec une règle globale type "planning gate" (workflows `ralph`, `autopilot`...), elle peut intercepter ta requête avant que le skill ne s'exécute. Le sync filesystem reste correct — vérifie avec `diff -rq` que le contenu est bien là.
 
 ## License
 
